@@ -1,207 +1,172 @@
-# Race schedule collector + automatic API — version 2
+# F1 schedule scraper with session times — version 3
 
-Collects championship race-weekend dates from the official Formula1.com calendar.
-This is an independent technical starter, not an official or endorsed F1 product.
+This independent starter collects race-weekend dates and exact scheduled session
+start times from public Formula1.com calendar and race pages. It is not an official
+or endorsed Formula 1 product. Commercial data-use permission is separate.
 
-## Start the automatic API (Python 3.10+)
+## Free automatic updates using GitHub
 
-Unzip this project and open Terminal in its folder.
-
-macOS / Linux:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m uvicorn api:create_app --factory --host 0.0.0.0 --port 8000 --workers 1
-```
-
-Windows PowerShell:
-
-```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn api:create_app --factory --host 0.0.0.0 --port 8000 --workers 1
-```
-
-Open http://localhost:8000/api/schedule after initial collection completes.
-Interactive endpoint documentation: http://localhost:8000/docs.
-
-The service automatically collects the current season on first startup and checks
-for refreshes every six hours. It stores the last successful schedule in SQLite.
-Visitors read the cached data; they do not trigger new scrapes. On a source failure,
-the API keeps the saved schedule and marks it stale. If no good schedule exists,
-it returns HTTP 503 rather than inventing data. Initial retrieval may take a minute.
-The collector makes no immediate retry after failure; its next attempt is at the
-normal refresh interval, including across restarts using the same persistent disk.
-
-Configure environment variables before starting:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| F1_SEASON | Current UTC year | Season to collect; pin this if needed |
-| REFRESH_SECONDS | 21600 | Refresh interval; minimum 3600 seconds |
-| STATE_DIR | state | Writable persistent SQLite directory |
-| ALLOWED_ORIGINS | http://localhost:3000,http://localhost:5173 | Comma-separated website origins |
-
-Production example (replace example.com with your actual website origin):
-
-```bash
-export F1_SEASON=2026
-export STATE_DIR=/absolute/persistent/directory
-export ALLOWED_ORIGINS=https://example.com,https://www.example.com
-python -m uvicorn api:create_app --factory --host 0.0.0.0 --port 8000 --workers 1
-```
-
-Use exactly one worker and one service replica. This starter embeds its collector
-inside the API process. Multiple workers or replicas would each run a collector.
-For horizontal scaling, move collection to one dedicated scheduled worker and use
-a shared database. CORS governs browser access; it is not API authentication.
-The read API is public, has no public refresh endpoint and is not a paid API gateway.
-
-## Connect your website once
-
-Use `website-integration.js`: replace API_BASE with the hosted HTTPS API URL and
-import `mountRaceSchedule` into your existing website:
+1. This repository is already public: maneeshbichala2027-blip/f1-Schedule-API.
+2. Keep scraper files in f1-schedule-starter/. The workflow is at the repository
+   root under .github/workflows/update-schedule.yml and runs from that subfolder.
+3. Open the repository Actions tab to view automatic refresh runs.
+4. The workflow must be on your default branch. The instructions below assume main.
+5. In repository Settings → Secrets and variables → Actions → Variables, add
+   F1_SEASON with value 2026 to pin the season. The workflow defaults to 2026 so the configured website URL stays consistent.
+6. Open Actions → Update official race schedule → Run workflow. Allow several minutes
+   because the scraper retrieves every race's session schedule with request delays.
+7. On success the workflow commits `f1-schedule-starter/data/schedule-2026.json`, `f1-schedule-starter/data/schedule-2026.csv`
+   and `f1-schedule-starter/data/sessions-2026.csv`. Repository rules must allow this workflow to push.
+   The file declares contents: write; organization policy can override that setting.
+8. website-integration.js already points at this repository's public schedule URL.
+9. Import mountRaceSchedule into your existing website and pass your schedule element:
 
 ```javascript
 import { mountRaceSchedule } from './website-integration.js';
 const unmount = mountRaceSchedule(document.querySelector('#race-schedule'));
-// Call unmount() when navigating away in a single-page app.
 ```
 
-Your existing page needs a container: `<div id="race-schedule"></div>`.
-Or use `loadRaceSchedule()` and render the data with your own UI components.
-The helper refreshes the displayed data every minute while mounted, retains its
-last rendered races on a temporary API failure, and displays stale-data status.
-Only the backend contacts Formula1.com, at its configured interval.
+Your page needs a container: `<div id="race-schedule"></div>`. Call unmount when
+leaving the view in a single-page app. You can instead call loadRaceSchedule and
+render the returned data in your own existing design.
 
-No recurring JSON/CSV upload is required. Fetching an API still transfers JSON
-automatically, which is different from manually replacing a file.
+The configured public data URL looks like this:
 
-## Deploy the backend
+https://raw.githubusercontent.com/maneeshbichala2027-blip/f1-Schedule-API/main/f1-schedule-starter/data/schedule-2026.json
 
-Run this on an always-on Python/container host with outbound HTTPS, persistent
-storage and an HTTPS endpoint. A static-only host cannot run this Python service.
-A sleeping process cannot run the refresh loop while asleep. Use an always-on
-instance for the stated schedule. This project has NOT been deployed for you.
+Open the resulting real URL in your browser to verify it returns JSON. No secret or
+GitHub token belongs in your website code. This direct URL requires a public repo.
+Only publish data and code you have the rights to publish. Your main website repo
+can remain private. Serve the website over HTTP(S), not by double-clicking a file.
 
-Build/run the included Dockerfile if your host supports Docker:
+The workflow requests updates every six hours, at minute 17 UTC. The website helper
+reads data every minute while mounted, but GitHub caching can add a delay. This is
+scheduled data collection, NOT a live timing service. No Render subscription or
+always-on Python server is needed for this route. Standard GitHub-hosted runners
+are free for public repos, subject to GitHub terms and limits. Scheduled runs may
+be delayed or skipped. Public repo scheduled workflows can be disabled after 60 days
+of inactivity. Check the Actions tab and last successful update occasionally.
+
+The workflow is configured in this repository. Check Actions for its latest result.
+Your separate website still needs to import the helper or fetch the data URL.
+
+## Data available to your website
+
+Top-level JSON: schema_version=2, season, source_url, fetched_at, parsed_at,
+collection_mode, date_semantics, races. The standalone exporter adds parsed_at and
+collection_mode; the optional API provides stale and refresh status instead.
+
+Each race includes:
+
+- season, round, event_id, country_label, race_name, venue_label
+- weekend_start and weekend_end: date-only values
+- race_start_time_utc, race_start_time_track, race_start_time_ist
+- track_timezone: source timezone, such as US/Central
+- sessions_status, sessions_fetched_at, sessions
+- source_url and fetched_at
+
+The country_label is the source's event label, not verified geography. venue_label
+may be a city; it is not guaranteed to be the circuit's full name.
+
+Each session includes:
+
+- session_id, name, session_type, source_state, timing_status
+- start_time_utc, start_time_track, start_time_ist
+- scheduled_end_time_utc, track_timezone, source_utc_offset
+- source_url, fetched_at
+
+Practice, qualifying, sprint qualifying, sprint and race sessions are collected
+when present in the official race page's meetingSessions data. The scraper does
+not assume every weekend has the same format or fabricate missing sessions.
+Unpublished start times are null. An explicitly empty source schedule has an empty
+sessions array and sessions_status=not_published. Unrecognized markup is a failure,
+not a reason to invent times. No countdown should be shown for null start times.
+
+Times include dates and UTC offsets. IST is Asia/Kolkata (+05:30); a race can fall
+on the following calendar day in India. The parser checks the supplied offset
+against the supplied timezone, so daylight-saving mismatches fail validation.
+Scheduled end times are NOT actual race finishes. A completed session's start
+is the schedule published by the source, not necessarily its actual start.
+
+Use race_start_time_utc for an exact race-start countdown. Never turn a weekend
+calendar date into an assumed race start time.
+
+## Run the collector locally (Python 3.10+)
+
+macOS/Linux:
 
 ```bash
-docker build -t race-schedule-api .
-docker run -d --name race-schedule-api --restart unless-stopped \
-  -p 8000:8000 \
-  -e F1_SEASON=2026 \
-  -e ALLOWED_ORIGINS=https://example.com \
-  -v race-schedule-data:/data \
-  race-schedule-api
-```
-
-The container listens on port 8000; configure your host or HTTPS reverse proxy to
-route to it. Docker alone does not configure a domain or TLS certificate. If the
-host requires its own port, override the launch command accordingly.
-Mount persistent storage at /data (or your STATE_DIR); back up the SQLite database.
-For custom bind mounts, the directory must be writable by container UID 10001.
-
-After deployment:
-
-1. Check `/health` for process health and `/ready` for a fresh usable schedule.
-2. Check `/api/schedule` for races and fetched_at.
-3. Configure ALLOWED_ORIGINS to your exact website origin, including https://.
-4. Set API_BASE to your backend's HTTPS address.
-5. Deploy your website once. The data then refreshes without file uploads.
-
-Monitor logs for failures and /ready for stale data. Changes appear after a successful
-backend refresh and the website's next API poll, not instantly when F1 edits a page.
-The count-drop guard blocks automatic acceptance of a smaller season. If rounds are
-legitimately removed, review the source, stop the service, back up state, then reset
-the season's cache row before restarting. Layout changes require parser maintenance.
-
-## Optional one-time JSON / CSV export
-
-The original command remains available for debugging or downloads:
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-scraper.txt
 python scrape_schedule.py --year 2026
 ```
 
-Outputs: `data/schedule-2026.json` and `data/schedule-2026.csv`.
-These files are NOT the API's database and do not need to be uploaded to your site.
-The bundled data folder is a previously collected snapshot, not a live API response.
-
-## Data fields
-
-- season, round, event_id (the source page slug)
-- country_label: the source's event label, not a verified geographic country
-- race_name: official event title as shown by the source
-- venue_label: the source's trackName metadata, often a city; nullable and NOT guaranteed to be the circuit's full name
-- weekend_start and weekend_end: ISO calendar dates, not UTC timestamps
-- source_url and fetched_at (UTC retrieval timestamp)
-
-Top-level JSON contains source, schema version, collection mode and timestamps.
-Testing events are excluded. Duplicate featured cards are excluded.
-No race count, venue or date is hardcoded.
-
-## Using JSON in a website
-
-Copy the generated JSON to your site's public data directory. For example:
-
-```javascript
-const response = await fetch('/data/schedule-2026.json');
-if (!response.ok) throw new Error('Schedule unavailable');
-const { races, fetched_at } = await response.json();
-console.table(races.map(r => ({
-  round: r.round,
-  name: r.country_label,
-  start: r.weekend_start,
-  end: r.weekend_end
-})));
-```
-
-Render titles as text, not raw HTML. Display source and last successful refresh.
-Keep date-only values as calendar dates; avoid treating midnight UTC as a race time.
-The API is included; hosting and connecting your existing website are separate deployment steps.
-
-## Standalone export reliability
-
-The standalone collector honors robots.txt and validates date ranges and fields.
-It preserves existing export files when collection fails. Each export file is
-replaced atomically; the CSV/JSON pair is not a single transaction.
-
-Offline parsing of HTML you already possess:
+Windows PowerShell: use `py -m venv .venv`, then `.venv\Scripts\Activate.ps1`.
+The command now includes session times by default. It fetches all race pages with
+two-second pauses. Use --weekends-only to skip sessions. Offline calendar parsing
+requires --weekends-only because session details are on separate race pages:
 
 ```bash
-python scrape_schedule.py --year 2026 --html calendar.html --out offline-data
+python scrape_schedule.py --year 2026 --html calendar.html --weekends-only --out offline-data
 ```
 
-Offline exports have null fetched_at, since retrieval time is unknown.
+Outputs include the main JSON, one race-summary CSV, and a separate session CSV.
+JSON is the recommended input for websites because it preserves nested sessions.
+Any download or parser failure aborts collection before output replacement. A
+lower round count than an existing saved schedule also requires manual review.
+Each file is replaced atomically; the three files are not one atomic transaction.
+The GitHub job commits only if the whole collector command succeeds.
 
-## Tests
+## Optional hosted API
+
+The previously provided Python API also includes session times automatically.
+Use this only if you prefer a hosted backend instead of free GitHub updates.
+
+```bash
+python -m pip install -r requirements.txt
+python -m uvicorn api:create_app --factory --host 0.0.0.0 --port 8000 --workers 1
+```
+
+Endpoints: /api/schedule, /health and /ready. The API starts background collection
+on startup and checks its six-hour refresh interval once a minute. Initial full
+collection can take several minutes. Visitors never trigger collection. It keeps
+the last successful snapshot and marks it stale if a later refresh fails. With no
+successful snapshot it returns HTTP 503. A schedule is committed to SQLite only
+after all calendar and session collection succeeds.
+
+Settings: F1_SEASON (current UTC year by default), REFRESH_SECONDS (21600; minimum
+3600), STATE_DIR (state), ALLOWED_ORIGINS (comma-separated exact website origins).
+Use one worker and one replica with persistent storage. The in-process scheduler
+cannot refresh while its host is asleep. The Dockerfile listens on port 8000 and
+stores state under /data; attach a writable persistent volume. Configure HTTPS
+through your hosting provider. This project does not configure a domain or TLS.
+
+For a hosted API, replace DATA_URL in website-integration.js with its HTTPS
+/api/schedule address. CORS is a browser control, not authentication. The API is
+public and does not expose a visitor-triggered scrape endpoint. Monitor logs and
+/ready. Deployments, Docker and GitHub execution are not validated by local tests.
+
+## Tests and maintenance
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m unittest -v
 ```
 
-## Scope and next step
-
-This version covers race-weekend date ranges. Exact practice, sprint, qualifying and
-race start times are NOT included. The next module should read each weekend's
-schedule, retain timezone-aware source times and convert them for display,
-including Asia/Kolkata. Dates alone cannot support an accurate race-start countdown.
-
-No images, logos, news, video or results are collected.
+See VALIDATION.md for performed checks. The parser reads JSON embedded in public
+page scripts without executing JavaScript. Changes to that source structure may
+require maintenance. It honors robots.txt and does not bypass logins, CAPTCHAs or
+blocks. It makes a finite sequential pass over the calendar and linked races.
 
 ## Content-use terms
 
-Public accessibility and robots allowance do not grant commercial reuse rights.
-Formula1.com's published legal notices restrict extraction and commercial reuse.
-Obtain permission covering your intended collection, storage and website use before
-commercial deployment. This prototype and source attribution do not supply a licence.
+Public access and robots allowance do not grant commercial rights. Formula1.com's
+legal notices restrict extraction and commercial reuse. Obtain permission covering
+collection, storage and website use before commercial deployment. The included
+workflow, attribution and hosting plan do not supply a data licence.
 
 Official calendar: https://www.formula1.com/en/racing/2026
 Legal notices: https://www.formula1.com/en/information/legal-notices.7egvZU48hzrypubGBNcQKt
-
-See VALIDATION.md for the checks performed on this delivered version.
+GitHub billing: https://docs.github.com/en/actions/concepts/billing-and-usage
+GitHub schedules: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule

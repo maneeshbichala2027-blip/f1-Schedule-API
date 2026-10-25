@@ -18,15 +18,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from scrape_schedule import collect_online, parse_schedule
+from session_times import enrich_races
 
 log = logging.getLogger("schedule")
 
 
 class ScheduleStore:
-    def __init__(self, directory, year, interval=21600, fetch=collect_online, clock=time.time):
+    def __init__(self, directory, year, interval=21600, fetch=collect_online, clock=time.time, enricher=enrich_races):
         self.path = Path(directory) / "schedule.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.year, self.interval, self.fetch, self.clock = year, interval, fetch, clock
+        self.enricher = enricher
         self.lock = threading.Lock()
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS cache (year INTEGER PRIMARY KEY, payload TEXT, attempted REAL, succeeded REAL, failed INTEGER NOT NULL DEFAULT 0)")
@@ -57,7 +59,8 @@ class ScheduleStore:
                 old = current["payload"]
                 if old and len(races) < len(old["races"]):
                     raise ValueError("Round count fell; review the source before accepting a smaller calendar")
-                payload = {"schema_version": 1, "season": self.year, "source_url": f"https://www.formula1.com/en/racing/{self.year}", "fetched_at": fetched_at, "date_semantics": "Race-weekend dates, not session start times", "races": races}
+                races = self.enricher(races)
+                payload = {"schema_version": 2, "season": self.year, "source_url": f"https://www.formula1.com/en/racing/{self.year}", "fetched_at": fetched_at, "date_semantics": "Weekend dates are date-only; session timestamps have UTC offsets. End times are scheduled, not actual finishes.", "races": races}
                 with self.connect() as db:
                     db.execute("UPDATE cache SET payload=?, succeeded=?, failed=0 WHERE year=?", (json.dumps(payload, ensure_ascii=False), self.clock(), self.year))
                 log.info("Refreshed %s schedule: %s rounds", self.year, len(races))

@@ -120,6 +120,7 @@ def main():
     parser.add_argument("--year", type=int, default=datetime.now(timezone.utc).year)
     parser.add_argument("--html", type=Path, help="Parse an existing calendar HTML file offline")
     parser.add_argument("--out", type=Path, default=Path("data"))
+    parser.add_argument("--weekends-only", action="store_true", help="Skip exact session-time collection")
     args = parser.parse_args()
     if not 1950 <= args.year <= 2100:
         parser.error("year must be between 1950 and 2100")
@@ -127,6 +128,11 @@ def main():
         content = args.html.read_bytes() if args.html else collect_online(args.year)
         fetched_at = datetime.now(timezone.utc).isoformat() if not args.html else None
         races = parse_schedule(content, args.year, fetched_at)
+        if not args.weekends_only:
+            if args.html:
+                raise ValueError("Use --weekends-only with offline calendar HTML; session pages are separate")
+            from session_times import enrich_races
+            races = enrich_races(races)
         target = args.out / f"schedule-{args.year}"
         # Preserve a good existing schedule if a later scrape loses records.
         previous_path = target.with_suffix(".json")
@@ -134,14 +140,22 @@ def main():
             previous = json.loads(previous_path.read_text(encoding="utf-8"))
             if len(races) < len(previous.get("races", [])):
                 raise ValueError("Round count fell; review source before replacing existing output")
-        payload = {"schema_version": 1, "season": args.year, "source_url": f"{ORIGIN}/en/racing/{args.year}", "fetched_at": fetched_at, "parsed_at": datetime.now(timezone.utc).isoformat(), "collection_mode": "offline" if args.html else "online", "date_semantics": "Race-weekend calendar dates; not session start timestamps", "races": races}
+        payload = {"schema_version": 2, "season": args.year, "source_url": f"{ORIGIN}/en/racing/{args.year}", "fetched_at": fetched_at, "parsed_at": datetime.now(timezone.utc).isoformat(), "collection_mode": "offline" if args.html else "online", "date_semantics": "Weekend dates are date-only; session timestamps include UTC offsets. End times are scheduled, not actual finishes.", "races": races}
         output = io.StringIO(newline="")
-        writer = csv.DictWriter(output, fieldnames=FIELDS)
+        csv_fields = FIELDS + ['race_start_time_utc', 'race_start_time_track', 'race_start_time_ist', 'track_timezone']
+        writer = csv.DictWriter(output, fieldnames=csv_fields, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(races)
         atomic_write(target.with_suffix(".csv"), output.getvalue())
+        session_rows = [{"season": args.year, "round": r['round'], "event_id": r['event_id'], **s} for r in races for s in r.get('sessions', [])]
+        session_csv = io.StringIO(newline='')
+        session_fields = ['season', 'round', 'event_id', 'session_id', 'name', 'session_type', 'source_state', 'timing_status', 'track_timezone', 'source_utc_offset', 'start_time_utc', 'start_time_track', 'start_time_ist', 'scheduled_end_time_utc', 'source_url', 'fetched_at']
+        sw = csv.DictWriter(session_csv, fieldnames=session_fields)
+        sw.writeheader()
+        sw.writerows(session_rows)
+        atomic_write(args.out / f'sessions-{args.year}.csv', session_csv.getvalue())
         atomic_write(previous_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        print(f"Exported {len(races)} rounds to {target}.json and {target}.csv")
+        print(f"Exported {len(races)} rounds and {len(session_rows)} sessions to {args.out}")
     except Exception as exc:
         print(f"Collection failed: {exc}", file=sys.stderr)
         return 1

@@ -20,7 +20,7 @@ class ApiTests(unittest.TestCase):
         def fetch(year):
             self.calls.append(year)
             return self.page
-        self.store = ScheduleStore(self.directory.name, 2026, 3600, fetch=fetch, clock=lambda: self.now[0])
+        self.store = ScheduleStore(self.directory.name, 2026, 3600, fetch=fetch, clock=lambda: self.now[0], enricher=lambda races: races)
 
     def test_due_refresh_changes_data_and_get_does_not_scrape(self):
         self.assertTrue(self.store.tick())
@@ -50,7 +50,7 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(result["stale"])
         self.assertTrue(result["last_refresh_failed"])
         # Restart preserves last good data and last attempted refresh.
-        restarted = ScheduleStore(self.directory.name, 2026, 3600, fetch=lambda _: self.fail("Unexpected fetch"), clock=lambda: self.now[0])
+        restarted = ScheduleStore(self.directory.name, 2026, 3600, fetch=lambda _: self.fail("Unexpected fetch"), clock=lambda: self.now[0], enricher=lambda races: races)
         self.assertFalse(restarted.tick())
         self.assertEqual(restarted.response()["races"], original)
 
